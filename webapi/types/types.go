@@ -61,7 +61,7 @@ type DealProposal struct { //nolint:revive
 	StartTime      time.Time    `json:"deal_start_time"`
 	StartEpoch     int64        `json:"deal_start_epoch"`
 	ImportCMD      string       `json:"sample_import_cmd"`
-	Sources        []DataSource `json:"sources,omitempty"`
+	Sources        []FilSource  `json:"sources,omitempty"`
 }
 
 type ReplicaCounts struct { //nolint:revive
