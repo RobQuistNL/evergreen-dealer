@@ -5,6 +5,8 @@ go 1.17
 require (
 	github.com/dgraph-io/ristretto v0.1.0
 	github.com/dustin/go-humanize v1.0.0
+	github.com/filecoin-project/evergreen-dealer v0.0.0-20220908162331-dab66889beca
+	github.com/filecoin-project/evergreen-dealer/webapi/types v0.0.0-20220908162331-dab66889beca
 	github.com/filecoin-project/go-address v0.0.6
 	github.com/filecoin-project/go-fil-markets v1.20.3
 	github.com/filecoin-project/go-jsonrpc v0.1.5

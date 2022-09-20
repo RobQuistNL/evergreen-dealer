@@ -288,6 +288,10 @@ github.com/fatih/color v1.13.0/go.mod h1:kLAiJbzzSOZDVNGyDpeOxJ47H46qBXwg5ILebYF
 github.com/felixge/httpsnoop v1.0.1/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/filecoin-project/dagstore v0.5.2 h1:Nd6oXdnolbbVhpMpkYT5PJHOjQp4OBSntHpMV5pxj3c=
 github.com/filecoin-project/dagstore v0.5.2/go.mod h1:mdqKzYrRBHf1pRMthYfMv3n37oOw0Tkx7+TxPt240M0=
+github.com/filecoin-project/evergreen-dealer v0.0.0-20220908162331-dab66889beca h1:jgN/zR5w9xM5J0UY5Q9C0OV6Ja6Mg88IVp79OcgByPY=
+github.com/filecoin-project/evergreen-dealer v0.0.0-20220908162331-dab66889beca/go.mod h1:McBBggORDgjUBxkPM2radm5rJq7HzDsXvECUvL+aWaw=
+github.com/filecoin-project/evergreen-dealer/webapi/types v0.0.0-20220908162331-dab66889beca h1:uibzC55692NCJYVYI7XMe9d06nhbbhOlUuAOmyAjcN4=
+github.com/filecoin-project/evergreen-dealer/webapi/types v0.0.0-20220908162331-dab66889beca/go.mod h1:P0SQ+F7F9bzqsWZA7/HmJtn8TV1bAj9zXo0jOmzntn4=
 github.com/filecoin-project/filecoin-ffi v0.30.4-0.20200910194244-f640612a1a1f h1:vg/6KEAOBjICMaWj+xofJCp09HYRfpO3ZbJsnJo22pA=
 github.com/filecoin-project/filecoin-ffi v0.30.4-0.20200910194244-f640612a1a1f/go.mod h1:+If3s2VxyjZn+KGGZIoRXBDSFQ9xL404JBJGf4WhEj0=
 github.com/filecoin-project/go-address v0.0.3/go.mod h1:jr8JxKsYx+lQlQZmF5i2U0Z+cGQ59wMIps/8YW/lDj8=
