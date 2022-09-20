@@ -13,6 +13,12 @@ LANGUAGE sql PARALLEL RESTRICTED AS $$
 $$;
 
 CREATE OR REPLACE FUNCTION
+  evergreen.continents() RETURNS TABLE ( continent TEXT )
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT * FROM ( VALUES ('af'), ('as'), ('eu'), ('na'), ('oc'), ('sa') ) lst
+$$;
+
+CREATE OR REPLACE FUNCTION
   evergreen.max_program_replicas() RETURNS INTEGER
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT 10
@@ -67,6 +73,17 @@ BEGIN
   RETURN NEW;
 END;
 $$;
+
+CREATE OR REPLACE
+  FUNCTION evergreen.record_metric_change() RETURNS TRIGGER
+    LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO evergreen.metrics_log ( name, dimensions, value, collected_at, collection_took_seconds ) VALUES ( NEW.name, NEW.dimensions, NEW.value, NEW.collected_at, NEW.collection_took_seconds );
+  RETURN NULL;
+END;
+$$;
+
 
 CREATE OR REPLACE
   FUNCTION evergreen.init_deal_related_actors() RETURNS TRIGGER
@@ -165,7 +182,7 @@ CREATE TABLE IF NOT EXISTS evergreen.published_deals (
   decoded_label TEXT CONSTRAINT valid_label_cid CHECK ( evergreen.valid_cid( decoded_label ) ),
   is_filplus BOOL NOT NULL,
   status TEXT NOT NULL,
-  status_meta TEXT,
+  meta JSONB,
   start_epoch INTEGER NOT NULL CONSTRAINT valid_start CHECK ( start_epoch > 0 ),
   start_time TIMESTAMP WITH TIME ZONE NOT NULL GENERATED ALWAYS AS ( evergreen.ts_from_epoch( start_epoch ) ) STORED,
   end_epoch INTEGER NOT NULL CONSTRAINT valid_end CHECK ( end_epoch > 0 ),
@@ -215,6 +232,57 @@ CREATE INDEX IF NOT EXISTS proposals_client_idx ON evergreen.proposals ( client_
 CREATE INDEX IF NOT EXISTS proposals_provider_idx ON evergreen.proposals ( provider_id );
 CREATE INDEX IF NOT EXISTS proposals_piece_idx ON evergreen.proposals ( piece_cid );
 
+CREATE TABLE IF NOT EXISTS evergreen.metrics (
+  name TEXT NOT NULL,
+  dimensions TEXT[][] NOT NULL,
+  description TEXT NOT NULL,
+  value BIGINT,
+  collected_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CLOCK_TIMESTAMP(),
+  collection_took_seconds NUMERIC NOT NULL,
+  CONSTRAINT metric UNIQUE ( name, dimensions )
+);
+CREATE TRIGGER trigger_store_metric_logs
+  AFTER INSERT OR UPDATE ON evergreen.metrics
+  FOR EACH ROW
+  EXECUTE PROCEDURE evergreen.record_metric_change()
+;
+
+CREATE TABLE IF NOT EXISTS evergreen.metrics_log (
+  name TEXT NOT NULL,
+  dimensions TEXT[][] NOT NULL,
+  value BIGINT,
+  collected_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  collection_took_seconds NUMERIC NOT NULL
+);
+CREATE INDEX IF NOT EXISTS metrics_log_collected_name_dim ON evergreen.metrics_log ( collected_at, name );
+
+
+CREATE OR REPLACE VIEW evergreen.clients_datacap_available AS
+  SELECT
+    c.client_id,
+    c.client_address,
+    (
+      c.activateable_datacap
+        -
+      COALESCE(
+        (
+        SELECT SUM( (dealstart_payload->'Data'->'PieceSize')::BIGINT / 127 * 128)
+          FROM proposals p
+        WHERE
+          p.proposal_failstamp = 0
+            AND
+          p.activated_deal_id IS NULL
+            AND
+          p.client_id = c.client_id
+        ),
+        0
+      )
+    ) AS datacap_available
+  FROM clients c
+  WHERE c.is_affiliated
+  ORDER BY datacap_available
+;
+
 BEGIN;
 DROP VIEW IF EXISTS frontpage_stats_v0;
 DROP VIEW IF EXISTS deallist_v0;
@@ -245,6 +313,8 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
             d0.piece_cid = pi.piece_cid
               AND
             d0.status = 'active'
+              AND
+            NOT COALESCE( (d0.meta->'inactive')::BOOL, false )
         )
           AND
         -- fewer than program-allowed total not-yet-expiring replicas ( not counting our proposals )
@@ -258,6 +328,8 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
             d1.is_filplus
               AND
             d1.status = 'active'
+              AND
+            NOT COALESCE( (d1.meta->'inactive')::BOOL, false )
               AND
             d1.end_time > expiration_cutoff()
         )
@@ -287,6 +359,8 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
         JOIN evergreen.clients c USING ( client_id )
       WHERE
         d.status = 'active'
+          AND
+        NOT COALESCE( (d.meta->'inactive')::BOOL, false )
     )
   SELECT
       d.deal_id,
@@ -362,6 +436,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                   AND
                 d.status = 'active'
                   AND
+                NOT COALESCE( (d.meta->'inactive')::BOOL, false )
+                  AND
                 c.is_affiliated
             ) AS v
           ) sagg ) AS v
@@ -382,6 +458,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                   d.end_time > expiration_cutoff()
                     AND
                   d.status = 'active'
+                    AND
+                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
                     AND
                   c.is_affiliated
                     AND
@@ -407,6 +485,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                     AND
                   d.status = 'active'
                     AND
+                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
+                    AND
                   c.is_affiliated
                     AND
                   p.city = curkey.city
@@ -431,6 +511,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                     AND
                   d.status = 'active'
                     AND
+                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
+                    AND
                   c.is_affiliated
                     AND
                   p.country = curkey.country
@@ -454,6 +536,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                   d.end_time > expiration_cutoff()
                     AND
                   d.status = 'active'
+                    AND
+                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
                     AND
                   c.is_affiliated
                     AND
@@ -568,7 +652,7 @@ CREATE MATERIALIZED VIEW replica_counts AS (
       ) agg
     ) AS pending
   FROM pieces curpiece
-  WHERE NOT COALESCE( (meta->'inactive')::BOOL, false )
+  WHERE NOT COALESCE( (curpiece.meta->'inactive')::BOOL, false )
 );
 CREATE UNIQUE INDEX replica_counts_piece_cid ON evergreen.replica_counts ( piece_cid );
 ANALYZE evergreen.replica_counts;
@@ -604,6 +688,8 @@ CREATE VIEW frontpage_stats_v0 AS (
           AND
         pd.status = 'active'
           AND
+        NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
+          AND
         c.is_affiliated
     ),
     active_unique AS (
@@ -620,6 +706,8 @@ CREATE VIEW frontpage_stats_v0 AS (
             JOIN clients c USING ( client_id )
           WHERE
             pd.status = 'active'
+              AND
+            NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
               AND
             c.is_affiliated
         )

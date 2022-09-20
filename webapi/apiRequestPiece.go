@@ -43,7 +43,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 
 	cn := types.ReplicaCounts{MaxSp: 1}
 	var isKnownPiece, isMineExpiring bool
-	var rCidStr *string
+	var rCidStr, clientID *string
 	var customMidnightOffsetMins, curOutstandingBytes, customMaxOutstandingGiB, paddedPieceSize *int64
 
 	tx, err := common.Db.Begin(ctx)
@@ -74,14 +74,16 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		WITH
 			providers_of_active_nonexpiring_deals_for_piece AS (
 				SELECT DISTINCT( provider_id )
-					FROM published_deals
+					FROM published_deals pd
 					JOIN clients c USING ( client_id )
 				WHERE
-					piece_cid = $1
+					pd.piece_cid = $1
 						AND
-					status = 'active'
+					pd.status = 'active'
 						AND
-					end_time > expiration_cutoff()
+					NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
+						AND
+					pd.end_time > expiration_cutoff()
 						AND
 					c.is_affiliated
 			),
@@ -116,6 +118,15 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 			( SELECT payload_cid FROM payloads WHERE piece_cid = $1 ) AS payload_cid,
 
 			(
+				SELECT client_id
+					FROM clients_datacap_available
+				WHERE
+					datacap_available >= ( SELECT padded_size FROM pieces WHERE piece_cid = $1 )
+				ORDER BY datacap_available
+				LIMIT 1
+			) AS use_client_id,
+
+			(
 				SELECT SUM ( p.padded_size )
 					FROM pieces p
 					JOIN proposals pr USING ( piece_cid )
@@ -142,6 +153,8 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 								AND
 							provider_id = $2
 								AND
+							NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
+								AND
 							(
 								pd.status = 'terminated'
 									OR
@@ -161,6 +174,8 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 							pd.provider_id = $2
 								AND
 							pd.status != 'terminated'
+								AND
+							NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
 								AND
 							pd.end_time > expiration_cutoff()
 					)
@@ -235,7 +250,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		pcidStr,
 		spID,
 	).Scan(
-		&isKnownPiece, &paddedPieceSize, &rCidStr,
+		&isKnownPiece, &paddedPieceSize, &rCidStr, &clientID,
 		&curOutstandingBytes, &customMaxOutstandingGiB, &customMidnightOffsetMins,
 		&isMineExpiring, &cn.Total, &cn.Self, &cn.InOrg, &cn.InCity, &cn.InCountry, &cn.InContinent,
 		&cn.MaxTotal, &cn.MaxOrg, &cn.MaxCity, &cn.MaxCountry, &cn.MaxContinent,
@@ -266,7 +281,10 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		curOutstandingBytes = new(int64)
 	}
 
-	r := types.ResponseDealRequest{CurOutstandingBytes: *curOutstandingBytes}
+	r := types.ResponseDealRequest{
+		CurOutstandingBytes: *curOutstandingBytes,
+		MaxOutstandingBytes: &maxBytes,
+	}
 
 	if *curOutstandingBytes >= maxBytes {
 		return retPayloadAnnotated(
@@ -278,7 +296,6 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		)
 	}
 
-	r.MaxOutstandingBytes = &maxBytes
 	r.TentativeCounts = cn
 	if cn.Self >= cn.MaxSp ||
 		cn.InOrg >= cn.MaxOrg ||
@@ -295,6 +312,10 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 			"The current distribution of replicas for %s violates one of the program rules",
 			pcidStr,
 		)
+	}
+
+	if clientID == nil {
+		return retFail(c, nil, "Deal requests temporarily disabled: system seems to be out of datacap 🙀")
 	}
 
 	// let's do it!
@@ -330,12 +351,17 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		return err
 	}
 
+	clientAddr, err := filaddr.NewFromString(*clientID)
+	if err != nil {
+		return err
+	}
+
 	dp := lotusapi.StartDealParams{
 		DealStartEpoch:    lastMidnightEpoch + common.ProposalStartDelayFromMidnight,
 		MinBlocksDuration: common.ProposalDuration,
 		FastRetrieval:     true,
 		VerifiedDeal:      true,
-		Wallet:            common.EgWallet,
+		Wallet:            clientAddr,
 		Miner:             spAddr,
 		EpochPrice:        filbig.Zero(),
 		ProviderCollateral: filbig.Div(
@@ -363,7 +389,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		VALUES ( $1, $2, $3, $4 )
 		`,
 		spID,
-		common.EgWallet.String(),
+		*clientID,
 		pcidStr,
 		dpJ,
 	)
@@ -394,7 +420,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 			fmt.Sprintf("Deal queued for pcid %s", pcidStr),
 			``,
 			`In about 5 minutes check the pending list:`,
-			fmt.Sprintf(` echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" 'https://api.evergreen.filecoin.io/pending_proposals' | sh `, spID),
+			" " + urlAuthedFor(c, spID, "/pending_proposals"),
 		}, "\n"),
 	)
 }

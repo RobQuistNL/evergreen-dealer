@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/filecoin-project/evergreen-dealer/common"
@@ -93,8 +92,6 @@ func apiListPendingProposals(c echo.Context) error {
 					JOIN pieces p USING ( piece_cid )
 					JOIN payloads pl USING ( piece_cid )
 				WHERE
-					NOT COALESCE( (p.meta->'inactive')::BOOL, false )
-						AND
 					pr.provider_id = $1
 						AND
 					(pr.dealstart_payload->'DealStartEpoch')::BIGINT > $2
@@ -123,6 +120,8 @@ func apiListPendingProposals(c echo.Context) error {
 						NOT prelist.is_published
 							AND
 						pd.status = 'active'
+							AND
+						NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
 					ORDER BY pd.is_filplus DESC, pd.end_time DESC
 				) subq
 			) AS sources
@@ -211,21 +210,22 @@ func apiListPendingProposals(c echo.Context) error {
 		}
 	})
 
-	msg := strings.Join([]string{
-		"This is an overview of deals recently proposed to SP " + spID,
-		fmt.Sprintf(
-			`
+	msg := fmt.Sprintf(
+		`
+This is an overview of deals recently proposed to SP %s
+
 There currently are %0.2f GiB of pending deals:
   % 4d deal-proposals to send out
   % 4d successful proposals pending publishing
   % 4d deals published on chain awaiting sector activation
-`,
-			float64(r.CurOutstandingBytes)/(1<<30),
-			countPendingProposals,
-			len(r.PendingProposals),
-			countPublishedDeals,
-		),
-	}, "\n")
+
+You can request deal proposals using API endpoints as described in the docs`,
+		spID,
+		float64(r.CurOutstandingBytes)/(1<<30),
+		countPendingProposals,
+		len(r.PendingProposals),
+		countPublishedDeals,
+	)
 
 	if isActive {
 		msg += fmt.Sprintf(
